@@ -56,6 +56,8 @@ input,select,button{font:inherit;font-size:.9rem;padding:8px 10px;border:1px sol
 input:focus,select:focus{outline:2px solid var(--ac);outline-offset:-1px;border-color:transparent}
 button,.btn{cursor:pointer;font-weight:600;background:var(--ac);color:#fff;border-color:var(--ac);display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 button:hover,.btn:hover{filter:brightness(1.07)}
+.lt{font-weight:700}
+button:disabled{opacity:.45;cursor:not-allowed;filter:none}
 button.g{background:var(--card);color:var(--tx);border-color:var(--bd)}
 .bar label.btn{color:#fff;flex-direction:row;font-weight:600;font-size:.9rem}
 .btn{padding:8px 12px;border-radius:9px;border:1px solid var(--ac);font-size:.9rem;min-height:38px}
@@ -114,6 +116,7 @@ footer{color:var(--mu);font-size:.8rem;margin-top:12px}
   <button id="today" class="g" type="button">اليوم</button>
   <span class="sp"></span>
   <button id="add" type="button">+ إضافة سائق</button>
+  <button id="undo" class="g" type="button" disabled title="Ctrl+Z">↶ تراجع</button>
   <label class="btn">استيراد إكسل<input type="file" id="xl" accept=".xlsx,.xls" hidden></label>
   <button id="exp" class="g" type="button">تصدير إكسل</button>
   <button id="rs" class="g" type="button">استرجاع الأصلي</button>
@@ -153,7 +156,8 @@ function render(){
   R.forEach(function(x){[x.a,x.c].forEach(function(n){if(n===null)return;if(n<0)cnt.e++;else if(n<=LIM)cnt.w++;else if(n<=30)cnt.m++;else cnt.s++})});
   $('cards').innerHTML='<div class="c r"><b>'+cnt.e+'</b><span>رخص منتهية</span></div><div class="c r"><b>'+cnt.w+'</b><span>تنتهي خلال 10 أيام</span></div><div class="c a"><b>'+cnt.m+'</b><span>تنتهي خلال 30 يوم</span></div><div class="c n"><b>'+D.length+'</b><span>عدد السائقين</span></div>';
   var A=$('alert');
-  if(al.length){var li='';al.forEach(function(x){var p=[];if(x.a!==null&&x.a<=LIM)p.push('رخصة السائق: '+(x.a<0?'منتهية':x.a+' يوم'));if(x.c!==null&&x.c<=LIM)p.push('رخصة السيارة ('+esc(x.r[7])+'): '+(x.c<0?'منتهية':x.c+' يوم'));li+='<li><b>'+esc(x.r[0]||'(بدون اسم)')+'</b> — '+p.join(' · ')+'</li>'});
+  if(al.length){var li='';al.forEach(function(x){var p=[];function dd(n,e){return (n<0?'منتهية من '+(-n)+' يوم':n===0?'بتنتهي النهارده':'باقي '+n+' يوم')+' <small>('+fmt(e)+')</small>'}
+if(x.a!==null&&x.a<=LIM)p.push('<span class="lt">👤 رخصة السواق</span>: '+dd(x.a,x.r[4]));if(x.c!==null&&x.c<=LIM)p.push('<span class="lt">🚗 رخصة العربية '+esc(x.r[7])+'</span>: '+dd(x.c,x.r[10]));li+='<li><b>'+esc(x.r[0]||'(بدون اسم)')+'</b> — '+p.join(' &nbsp;·&nbsp; ')+'</li>'});
     A.style.display='block';A.innerHTML='<h2>تنبيه: '+al.length+' حالة محتاجة تجديد خلال '+LIM+' أيام أو منتهية</h2><ul>'+li+'</ul>';
     document.title='('+al.length+') تنبيه رخص';
     var key=v+':'+al.map(function(x){return x.i}).join();if(key!==shown){shown=key;toast('فيه '+al.length+' حالة محتاجة تجديد عاجل')}
@@ -165,10 +169,26 @@ function render(){
 }
 var tt;function toast(m){var T=$('toast');T.innerHTML='<span>'+m+'</span><button type="button" onclick="this.parentNode.style.display=\'none\'">تمام</button>';T.style.display='flex';clearTimeout(tt);tt=setTimeout(function(){T.style.display='none'},6000)}
 function iso(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
-$('tb').addEventListener('change',function(e){var t=e.target;if(t.dataset.k===undefined)return;D[+t.dataset.i][+t.dataset.k]=t.value;save();if([3,4,9,10].indexOf(+t.dataset.k)>-1)render()});
-$('tb').addEventListener('click',function(e){var b=e.target.closest('[data-del]');if(!b)return;if(!b.classList.contains('sure')){b.classList.add('sure');b.textContent='تأكيد؟';return}D.splice(+b.dataset.del,1);save();render()});
-$('add').onclick=function(){D.unshift(['','','',iso(),'','','','','',iso(),'','']);$('s').value='o';$('q').value='';$('f').value='all';save();render();var x=document.querySelector('#tb input');if(x)x.focus()};
-$('rs').onclick=function(){if(this.dataset.s!=='1'){this.dataset.s='1';this.textContent='تأكيد؟';return}D=JSON.parse(JSON.stringify(ORIG));save();this.dataset.s='';this.textContent='استرجاع الأصلي';render()};
+// Date inputs fire "change" on every typed segment (e.g. year "2" -> 0002), so re-rendering
+// right away rebuilt the row and killed the edit. Save now, re-render only after leaving the field.
+var dirty=false;
+// Undo history: one snapshot per edit (cell, add, delete, restore, import)
+var HIST=[],pre=null,pushed=false;
+function updU(){var b=$('undo');b.disabled=!HIST.length;b.textContent='↶ تراجع'+(HIST.length?' ('+HIST.length+')':'')}
+function snap(x){HIST.push(x||JSON.stringify(D));if(HIST.length>50)HIST.shift();updU()}
+function undo(){if(!HIST.length)return;var a=document.activeElement;if(a&&a.blur)a.blur();D=JSON.parse(HIST.pop());save();dirty=false;pre=null;render();updU();toast('تم التراجع عن آخر تعديل')}
+$('undo').onclick=undo;
+document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&!e.shiftKey&&(e.key==='z'||e.key==='Z'||e.key==='ي')){var a=document.activeElement;if(a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA')&&a.type!=='date'&&a.type!=='file')return;e.preventDefault();undo()}});
+$('tb').addEventListener('focusin',function(e){if(e.target.dataset&&e.target.dataset.k!==undefined){pre=JSON.stringify(D);pushed=false}});
+$('tb').addEventListener('change',function(e){var t=e.target;if(t.dataset.k===undefined)return;if(!pushed&&pre){snap(pre);pushed=true}D[+t.dataset.i][+t.dataset.k]=t.value;save();if([3,4,9,10].indexOf(+t.dataset.k)>-1)dirty=true});
+$('tb').addEventListener('focusout',function(){if(!dirty)return;setTimeout(function(){
+  var a=document.activeElement,i=null,k=null;if(a&&a.dataset&&a.dataset.k!==undefined&&$('tb').contains(a)){i=a.dataset.i;k=a.dataset.k}
+  dirty=false;render();
+  if(i!==null){var n=document.querySelector('#tb input[data-i="'+i+'"][data-k="'+k+'"]');if(n)n.focus()}
+},0)});
+$('tb').addEventListener('click',function(e){var b=e.target.closest('[data-del]');if(!b)return;if(!b.classList.contains('sure')){b.classList.add('sure');b.textContent='تأكيد؟';return}snap();D.splice(+b.dataset.del,1);save();render()});
+$('add').onclick=function(){snap();D.unshift(['','','',iso(),'','','','','',iso(),'','']);$('s').value='o';$('q').value='';$('f').value='all';save();render();var x=document.querySelector('#tb input');if(x)x.focus()};
+$('rs').onclick=function(){if(this.dataset.s!=='1'){this.dataset.s='1';this.textContent='تأكيد؟';return}snap();D=JSON.parse(JSON.stringify(ORIG));save();this.dataset.s='';this.textContent='استرجاع الأصلي';render()};
 $('exp').onclick=function(){if(typeof XLSX==='undefined'){toast('مكتبة الإكسل لسه ما اتحملتش');return}
   var H=['اسم السائق','المستفيد','نوع الرخصة','تاريخ الاصدار','تاريخ الانتهاء','نوع السيارة','سنة الصنع','رقم اللوحة','المورد','تاريخ الاصدار2','تاريخ الانتهاء3','ملاحظات'];
   var ws=XLSX.utils.aoa_to_sheet([H].concat(D)),wb=XLSX.utils.book_new();ws['!views']=[{RTL:true}];XLSX.utils.book_append_sheet(wb,ws,'الرخص');XLSX.writeFile(wb,'license-tracker-'+iso()+'.xlsx')};
@@ -183,7 +203,7 @@ $('xl').onchange=function(ev){var fl=ev.target.files[0];if(!fl)return;var rd=new
     function g(r,j){return j<0||r[j]==null?'':r[j]}
     out=[];for(var k=h+1;k<rows.length;k++){var r=rows[k];if(!r||!g(r,c.n))continue;
       out.push([String(g(r,c.n)).trim(),String(g(r,c.b)).trim(),String(g(r,c.t)).trim(),ser(g(r,c.ds)),ser(g(r,c.de)),(String(g(r,c.ct))+' '+String(g(r,c.m))).trim(),String(g(r,c.y)).trim(),(String(g(r,c.p))+' '+String(g(r,c.l))).trim(),String(g(r,c.s)).trim(),ser(g(r,c.cs)),ser(g(r,c.ce)),String(g(r,c.nt)).trim()])}});
-  if(out&&out.length){D=out;save();render();toast('تم استيراد '+out.length+' سائق')}else toast('مش لاقي جدول السائقين في الملف')}catch(e){toast('مقدرتش أقرا الملف')}};rd.readAsArrayBuffer(fl);ev.target.value=''};
+  if(out&&out.length){snap();D=out;save();render();toast('تم استيراد '+out.length+' سائق')}else toast('مش لاقي جدول السائقين في الملف')}catch(e){toast('مقدرتش أقرا الملف')}};rd.readAsArrayBuffer(fl);ev.target.value=''};
 var last=iso();$('dt').value=last;
 $('dt').onchange=$('q').oninput=$('f').onchange=$('s').onchange=render;
 $('today').onclick=function(){$('dt').value=iso();render()};
